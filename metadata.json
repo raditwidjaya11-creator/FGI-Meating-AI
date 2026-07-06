@@ -1,0 +1,8 @@
+{
+  "name": "FGi Meeting AI",
+  "description": "Enterprise-grade AI Meeting Management application for scheduling, live transcription, AI summarization, decision tracking, and task management.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
