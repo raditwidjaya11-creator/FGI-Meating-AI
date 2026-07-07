@@ -83,7 +83,7 @@ export const exportMeetingToPDF = (meeting: Meeting, users: User[]) => {
   const moderatorName = moderatorUser ? `${moderatorUser.name} (${moderatorUser.role})` : "-";
 
   // Resolve attendees names
-  const attendeesList = meeting.participantIds
+  const attendeesList = (meeting.participantIds || [])
     .map((id) => {
       const u = users.find((user) => user.id === id);
       return u ? `${u.name} [${u.role} - ${u.division || "Tim"}]` : null;
@@ -256,7 +256,7 @@ export const exportMeetingToPDF = (meeting: Meeting, users: User[]) => {
   doc.line(MARGIN_LEFT, y, PAGE_WIDTH - MARGIN_RIGHT, y);
   y += 4;
 
-  const resolvedParticipants = meeting.participantIds.map(id => users.find(u => u.id === id)).filter(Boolean) as User[];
+  const resolvedParticipants = (meeting.participantIds || []).map(id => users.find(u => u.id === id)).filter(Boolean) as User[];
   
   // Make sure at least host & notulis are shown if resolved list is empty
   if (resolvedParticipants.length === 0) {

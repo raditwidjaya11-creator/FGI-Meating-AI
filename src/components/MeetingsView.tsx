@@ -25,9 +25,28 @@ import {
   X,
   Sparkles,
   FileText,
-  Download
+  Download,
+  Trash2,
+  Bell,
+  Volume2
 } from "lucide-react";
 import { exportMeetingToPDF } from "../utils/pdfExport";
+
+export interface CustomMeetingTemplate {
+  id: string;
+  name: string;
+  description: string;
+  title: string;
+  type: MeetingType;
+  startTime: string;
+  endTime: string;
+  locationType: LocationType;
+  locationDetail: string;
+  project: string;
+  goal: string;
+  agenda: string;
+  selectedParticipants: string[];
+}
 
 const MEETING_TEMPLATES = [
   {
@@ -85,12 +104,121 @@ interface MeetingsViewProps {
 }
 
 export const MeetingsView: React.FC<MeetingsViewProps> = ({ onLaunchMeeting }) => {
-  const { meetings, addMeeting, users, masterData, currentUser, addMasterItem } = useApp();
+  const { meetings, addMeeting, users, masterData, currentUser, addMasterItem, addToast, playChime } = useApp();
   const [viewMode, setViewMode] = useState<"list" | "calendar" | "timeline">("list");
   const [showAddForm, setShowAddForm] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("All");
   const [selectedCompletedMeeting, setSelectedCompletedMeeting] = useState<Meeting | null>(null);
+
+  // Push notifications configuration state
+  const [pushEnabled, setPushEnabled] = useState(() => {
+    if (typeof window !== "undefined" && "Notification" in window) {
+      return Notification.permission === "granted";
+    }
+    return false;
+  });
+
+  const handleTogglePushNotifications = async () => {
+    if (!("Notification" in window)) {
+      addToast({
+        title: "Push Notifikasi Tidak Didukung",
+        message: "Browser Anda tidak mendukung push notifikasi HTML5.",
+        type: "warning"
+      });
+      return;
+    }
+
+    if (Notification.permission === "granted") {
+      addToast({
+        title: "Push Notifikasi Aktif",
+        message: "Notifikasi browser sudah aktif untuk komputer ini.",
+        type: "success"
+      });
+      return;
+    }
+
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission === "granted") {
+        setPushEnabled(true);
+        addToast({
+          title: "Izin Diberikan! 🔔",
+          message: "Anda akan menerima notifikasi desktop untuk rapat terjadwal.",
+          type: "success"
+        });
+      } else {
+        addToast({
+          title: "Izin Ditolak / Dibatasi",
+          message: "Izin notifikasi ditolak. Kami akan menggunakan Toast di dalam aplikasi sebagai cadangan.",
+          type: "info"
+        });
+      }
+    } catch (e) {
+      addToast({
+        title: "Notifikasi Browser Dibatasi",
+        message: "Izin dibatasi dalam iframe. In-app toast visual & audio alarm aktif!",
+        type: "info"
+      });
+    }
+  };
+
+  const handleTriggerMockUpcomingReminder = () => {
+    const activeOrScheduled = meetings.find((m) => m.status === "Scheduled") || meetings[0];
+    const targetMtg = {
+      ...activeOrScheduled,
+      title: activeOrScheduled?.title || "Evaluasi Keamanan IT & Backup Cloud",
+      startTime: "10:00",
+      endTime: "11:30",
+      locationDetail: activeOrScheduled?.locationDetail || "Zoom Link / Ruang VIP Rinjani",
+      project: activeOrScheduled?.project || "Sistem Keamanan IT",
+      meetingLink: "https://zoom.us/j/9876543210"
+    };
+
+    addToast({
+      title: "📢 Pengingat: Rapat dalam 15 menit",
+      message: `"${targetMtg.title}" akan segera dimulai di ${targetMtg.locationDetail}.`,
+      type: "meeting",
+      meeting: targetMtg,
+      duration: 15000
+    });
+  };
+
+  const handleTriggerMockStartReminder = () => {
+    const activeOrScheduled = meetings.find((m) => m.status === "Scheduled") || meetings[0];
+    const targetMtg = {
+      ...activeOrScheduled,
+      title: activeOrScheduled?.title || "Evaluasi Keamanan IT & Backup Cloud",
+      startTime: "Sekarang",
+      endTime: "Selesai",
+      locationDetail: activeOrScheduled?.locationDetail || "Google Meet Link",
+      project: activeOrScheduled?.project || "Sistem Keamanan IT",
+      meetingLink: "https://meet.google.com/abc-defg-hij"
+    };
+
+    addToast({
+      title: "🚨 Rapat Dimulai Sekarang!",
+      message: `"${targetMtg.title}" sedang berlangsung. Klik 'Luncurkan Rapat' untuk langsung bergabung!`,
+      type: "meeting",
+      meeting: targetMtg,
+      duration: 15000
+    });
+  };
+
+  // Custom templates states
+  const [customTemplates, setCustomTemplates] = useState<CustomMeetingTemplate[]>(() => {
+    const saved = localStorage.getItem("fgi_custom_meeting_templates");
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [templateTab, setTemplateTab] = useState<"system" | "custom">("system");
+  const [showSaveTemplateForm, setShowSaveTemplateForm] = useState(false);
+  const [newTemplateName, setNewTemplateName] = useState("");
+  const [newTemplateDesc, setNewTemplateDesc] = useState("");
+
+  // Persist custom templates
+  React.useEffect(() => {
+    localStorage.setItem("fgi_custom_meeting_templates", JSON.stringify(customTemplates));
+  }, [customTemplates]);
 
   // Form states
   const [title, setTitle] = useState("");
@@ -190,6 +318,37 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({ onLaunchMeeting }) =
     }
   };
 
+  const handleDeleteCustomTemplate = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setCustomTemplates(customTemplates.filter((tpl) => tpl.id !== id));
+  };
+
+  const handleSaveAsTemplate = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newTemplateName.trim()) return;
+
+    const newTpl: CustomMeetingTemplate = {
+      id: `tpl-custom-${Date.now()}`,
+      name: newTemplateName,
+      description: newTemplateDesc || `Template agenda untuk ${project || "Proyek Umum"}`,
+      title: title || "Rapat Koordinasi",
+      type: type,
+      startTime: startTime,
+      endTime: endTime,
+      locationType: locationType,
+      locationDetail: locationDetail,
+      project: project,
+      goal: goal,
+      agenda: agenda || "",
+      selectedParticipants: selectedParticipants
+    };
+
+    setCustomTemplates([newTpl, ...customTemplates]);
+    setNewTemplateName("");
+    setNewTemplateDesc("");
+    setShowSaveTemplateForm(false);
+  };
+
   // Mock file selector action
   const handleMockUpload = () => {
     const mockFiles = [
@@ -243,6 +402,56 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({ onLaunchMeeting }) =
               <Plus size={14} /> Buat Jadwal Rapat
             </button>
           )}
+        </div>
+      </div>
+
+      {/* Reminder Control Hub & Simulation Widget */}
+      <div className="bg-gradient-to-r from-blue-50/70 to-indigo-50/70 dark:from-slate-900/60 dark:to-indigo-950/20 border border-blue-100/40 dark:border-slate-800/80 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-sm">
+        <div className="flex items-start gap-3">
+          <div className="p-3 bg-white dark:bg-slate-950 rounded-2xl text-indigo-500 shadow-sm border border-indigo-100/50 dark:border-slate-800 shrink-0">
+            <Bell size={20} className="animate-pulse" />
+          </div>
+          <div>
+            <h3 className="text-xs font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+              Pusat Pengingat & Notifikasi Rapat
+              <span className="text-[9px] font-extrabold bg-green-500/10 text-green-600 dark:text-green-400 px-1.5 py-0.5 rounded">Aktif</span>
+            </h3>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
+              Sistem memindai rapat terjadwal secara real-time dan memberikan peringatan toast & audio double-chime 15 menit sebelum acara.
+            </p>
+            <div className="flex flex-wrap items-center gap-3 mt-2 text-[10px]">
+              <button
+                type="button"
+                onClick={handleTogglePushNotifications}
+                className="flex items-center gap-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-indigo-400 dark:hover:border-indigo-500/50 rounded-lg px-2.5 py-1 text-slate-600 dark:text-slate-300 font-semibold transition-all cursor-pointer"
+              >
+                <div className={`w-2 h-2 rounded-full ${pushEnabled ? 'bg-green-500' : 'bg-slate-300 dark:bg-slate-700'}`}></div>
+                Push Notif Browser: {pushEnabled ? "Diaktifkan" : "Klik untuk Aktifkan"}
+              </button>
+              <span className="text-slate-300 dark:text-slate-700 hidden sm:inline">|</span>
+              <span className="text-slate-400 dark:text-slate-500 font-medium">Offset Pengingat Rapat: 15 Menit</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={handleTriggerMockUpcomingReminder}
+            className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-[11px] rounded-xl cursor-pointer flex items-center gap-1.5 transition-all shadow-md shadow-indigo-600/10"
+          >
+            <Volume2 size={13} />
+            Simulasi Pengingat
+          </button>
+          
+          <button
+            type="button"
+            onClick={handleTriggerMockStartReminder}
+            className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-[11px] rounded-xl cursor-pointer flex items-center gap-1.5 transition-all shadow-md shadow-emerald-600/10"
+          >
+            <Sparkles size={13} />
+            Simulasi Rapat Mulai
+          </button>
         </div>
       </div>
 
@@ -441,52 +650,140 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({ onLaunchMeeting }) =
                     </div>
                     <div>
                       <h4 className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                        Gunakan Template Agenda Instan
+                        Template Agenda & Peserta Rapat
                       </h4>
                       <p className="text-[10px] text-slate-400">
-                        Pilih struktur rapat prafabrikasi untuk mengisi draf formulir secara otomatis
+                        Isi draf agenda & daftar peserta rapat instan secara otomatis
                       </p>
                     </div>
                   </div>
                 </div>
-                
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  {MEETING_TEMPLATES.map((tpl) => {
-                    let IconComponent = CalendarDays;
-                    if (tpl.id === "weekly_standup") IconComponent = Clock;
-                    if (tpl.id === "project_review") IconComponent = Briefcase;
-                    if (tpl.id === "client_briefing") IconComponent = Video;
-                    
-                    return (
-                      <button
-                        key={tpl.id}
-                        type="button"
-                        onClick={() => {
-                          setTitle(tpl.title);
-                          setType(tpl.type);
-                          setStartTime(tpl.startTime);
-                          setEndTime(tpl.endTime);
-                          setLocationType(tpl.locationType);
-                          setLocationDetail(tpl.locationDetail);
-                          setAgenda(tpl.agenda);
-                        }}
-                        className="p-3 bg-white dark:bg-slate-950 border border-slate-200/80 dark:border-slate-850/70 hover:border-indigo-500 dark:hover:border-indigo-500/60 rounded-xl text-left hover:shadow-md transition-all duration-200 group flex items-start gap-3 cursor-pointer"
-                      >
-                        <div className="p-2 rounded-xl bg-slate-50 dark:bg-slate-900/60 text-slate-500 group-hover:bg-indigo-50 dark:group-hover:bg-indigo-950/30 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors shrink-0">
-                          <IconComponent size={16} />
-                        </div>
-                        <div className="space-y-0.5 min-w-0">
-                          <span className="text-xs font-bold text-slate-800 dark:text-slate-200 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors block truncate">
-                            {tpl.name}
-                          </span>
-                          <p className="text-[10px] text-slate-400 dark:text-slate-500 line-clamp-1">
-                            {tpl.description}
-                          </p>
-                        </div>
-                      </button>
-                    );
-                  })}
+
+                {/* Tabs */}
+                <div className="flex border-b border-slate-200/50 dark:border-slate-800/60 gap-4 text-xs pb-1">
+                  <button
+                    type="button"
+                    onClick={() => setTemplateTab("system")}
+                    className={`pb-1 font-semibold transition-all border-b-2 cursor-pointer ${
+                      templateTab === "system"
+                        ? "border-indigo-500 text-indigo-600 dark:text-indigo-400"
+                        : "border-transparent text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                    }`}
+                  >
+                    Template Sistem
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTemplateTab("custom")}
+                    className={`pb-1 font-semibold transition-all border-b-2 cursor-pointer flex items-center gap-1.5 ${
+                      templateTab === "custom"
+                        ? "border-indigo-500 text-indigo-600 dark:text-indigo-400"
+                        : "border-transparent text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                    }`}
+                  >
+                    Template Kustom ({customTemplates.length})
+                  </button>
                 </div>
+                
+                {templateTab === "system" ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    {MEETING_TEMPLATES.map((tpl) => {
+                      let IconComponent = CalendarDays;
+                      if (tpl.id === "weekly_standup") IconComponent = Clock;
+                      if (tpl.id === "project_review") IconComponent = Briefcase;
+                      if (tpl.id === "client_briefing") IconComponent = Video;
+                      
+                      return (
+                        <button
+                          key={tpl.id}
+                          type="button"
+                          onClick={() => {
+                            setTitle(tpl.title);
+                            setType(tpl.type);
+                            setStartTime(tpl.startTime);
+                            setEndTime(tpl.endTime);
+                            setLocationType(tpl.locationType);
+                            setLocationDetail(tpl.locationDetail);
+                            setAgenda(tpl.agenda);
+                            setSelectedParticipants([]);
+                          }}
+                          className="p-3 bg-white dark:bg-slate-950 border border-slate-200/80 dark:border-slate-850/70 hover:border-indigo-500 dark:hover:border-indigo-500/60 rounded-xl text-left hover:shadow-md transition-all duration-200 group flex items-start gap-3 cursor-pointer"
+                        >
+                          <div className="p-2 rounded-xl bg-slate-50 dark:bg-slate-900/60 text-slate-500 group-hover:bg-indigo-50 dark:group-hover:bg-indigo-950/30 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors shrink-0">
+                            <IconComponent size={16} />
+                          </div>
+                          <div className="space-y-0.5 min-w-0">
+                            <span className="text-xs font-bold text-slate-800 dark:text-slate-200 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors block truncate">
+                              {tpl.name}
+                            </span>
+                            <p className="text-[10px] text-slate-400 dark:text-slate-500 line-clamp-1">
+                              {tpl.description}
+                            </p>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div>
+                    {customTemplates.length === 0 ? (
+                      <div className="text-center py-5 px-3 bg-white dark:bg-slate-950/40 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
+                        <p className="text-[11px] text-slate-400 dark:text-slate-500">
+                          Belum ada template kustom.
+                        </p>
+                        <p className="text-[10px] text-slate-400/80 dark:text-slate-500/80 mt-1">
+                          Isi draf rapat di bawah lalu klik tombol <strong className="text-indigo-500">Simpan sbg Template</strong> di pojok kanan bawah untuk menyimpannya di sini.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-[180px] overflow-y-auto">
+                        {customTemplates.map((tpl) => (
+                          <div
+                            key={tpl.id}
+                            onClick={() => {
+                              setTitle(tpl.title);
+                              setType(tpl.type);
+                              setStartTime(tpl.startTime);
+                              setEndTime(tpl.endTime);
+                              setLocationType(tpl.locationType);
+                              setLocationDetail(tpl.locationDetail || "");
+                              setProject(tpl.project || "");
+                              setGoal(tpl.goal || "");
+                              setAgenda(tpl.agenda);
+                              setSelectedParticipants(tpl.selectedParticipants || []);
+                            }}
+                            className="p-3 bg-white dark:bg-slate-950 border border-slate-200/80 dark:border-slate-850/70 hover:border-indigo-500 dark:hover:border-indigo-500/60 rounded-xl text-left hover:shadow-md transition-all duration-200 group flex items-start justify-between gap-3 cursor-pointer"
+                          >
+                            <div className="flex items-start gap-3 min-w-0">
+                              <div className="p-2 rounded-xl bg-indigo-50/50 dark:bg-indigo-950/20 text-indigo-500 shrink-0">
+                                <Sparkles size={16} />
+                              </div>
+                              <div className="space-y-0.5 min-w-0">
+                                <span className="text-xs font-bold text-slate-800 dark:text-slate-200 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors block truncate">
+                                  {tpl.name}
+                                </span>
+                                <p className="text-[10px] text-slate-400 dark:text-slate-500 line-clamp-1">
+                                  {tpl.description}
+                                </p>
+                                <span className="inline-block text-[9px] font-medium bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 rounded px-1 mt-1">
+                                  {tpl.selectedParticipants?.length || 0} Peserta
+                                </span>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={(e) => handleDeleteCustomTemplate(tpl.id, e)}
+                              className="p-1.5 hover:bg-red-50 dark:hover:bg-red-950/30 text-slate-300 hover:text-red-500 dark:hover:text-red-400 rounded-lg transition-colors shrink-0 cursor-pointer"
+                              title="Hapus template kustom"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -709,20 +1006,93 @@ export const MeetingsView: React.FC<MeetingsViewProps> = ({ onLaunchMeeting }) =
               </div>
 
               {/* Action buttons */}
-              <div className="flex justify-end gap-3 pt-4 border-t border-slate-100 dark:border-slate-800">
-                <button
-                  type="button"
-                  onClick={() => setShowAddForm(false)}
-                  className="px-4 py-2 text-xs font-semibold border border-slate-200 rounded-xl hover:bg-slate-50 cursor-pointer text-slate-600"
-                >
-                  Batal
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-xl cursor-pointer"
-                >
-                  Terbitkan Jadwal
-                </button>
+              <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-4">
+                {showSaveTemplateForm ? (
+                  <div className="p-4 bg-slate-50 dark:bg-slate-950/30 border border-slate-200 dark:border-slate-800 rounded-xl space-y-3 animate-fade-in">
+                    <h5 className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                      <Sparkles size={14} className="text-indigo-500" />
+                      Simpan Pengaturan Rapat sebagai Template Baru
+                    </h5>
+                    <p className="text-[10px] text-slate-500">
+                      Agenda dan daftar peserta rapat yang terpilih saat ini akan disimpan untuk digunakan kembali nanti.
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-semibold text-slate-600 dark:text-slate-400">Nama Template</label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="Contoh: Sinkronisasi Bulanan IT"
+                          value={newTemplateName}
+                          onChange={(e) => setNewTemplateName(e.target.value)}
+                          className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg p-2 text-xs focus:outline-none focus:border-blue-500"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-semibold text-slate-600 dark:text-slate-400">Deskripsi Singkat (Opsional)</label>
+                        <input
+                          type="text"
+                          placeholder="Contoh: Agenda rutin bulanan dan daftar PIC inti"
+                          value={newTemplateDesc}
+                          onChange={(e) => setNewTemplateDesc(e.target.value)}
+                          className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg p-2 text-xs focus:outline-none focus:border-blue-500"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex justify-end gap-2 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowSaveTemplateForm(false);
+                          setNewTemplateName("");
+                          setNewTemplateDesc("");
+                        }}
+                        className="px-3 py-1.5 border border-slate-200 rounded-lg hover:bg-slate-100 cursor-pointer text-slate-600"
+                      >
+                        Batal
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleSaveAsTemplate}
+                        disabled={!newTemplateName.trim()}
+                        className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-semibold rounded-lg cursor-pointer"
+                      >
+                        Simpan Template
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="flex justify-between items-center gap-3">
+                  {!showSaveTemplateForm && (
+                    <button
+                      type="button"
+                      onClick={() => setShowSaveTemplateForm(true)}
+                      className="px-4 py-2 text-xs font-semibold border border-indigo-200 hover:border-indigo-500 dark:border-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/20 text-indigo-600 dark:text-indigo-400 rounded-xl cursor-pointer flex items-center gap-1.5 transition-all"
+                    >
+                      <Sparkles size={14} />
+                      Simpan sbg Template
+                    </button>
+                  )}
+                  <div className="flex items-center gap-3 ml-auto">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAddForm(false);
+                        setShowSaveTemplateForm(false);
+                      }}
+                      className="px-4 py-2 text-xs font-semibold border border-slate-200 rounded-xl hover:bg-slate-50 cursor-pointer text-slate-600"
+                    >
+                      Batal
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-4 py-2 text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-xl cursor-pointer"
+                    >
+                      Terbitkan Jadwal
+                    </button>
+                  </div>
+                </div>
               </div>
 
             </form>

@@ -56,6 +56,70 @@ interface ActiveMeetingProps {
   onBack: () => void;
 }
 
+interface AgendaItem {
+  id: string;
+  text: string;
+  completed: boolean;
+  completedAt?: string;
+  speakerName?: string;
+  matchScore?: number;
+  matchedWords?: string[];
+  matchedText?: string;
+  manuallyChecked?: boolean;
+}
+
+const calculateMatchScore = (agendaText: string, transcriptText: string): { score: number, matchedWords: string[] } => {
+  const cleanText = (str: string) => {
+    return str
+      .toLowerCase()
+      .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "")
+      .replace(/\s+/g, " ");
+  };
+
+  const agendaWords = cleanText(agendaText).split(" ").filter(w => w.length > 2);
+  const transcriptWords = cleanText(transcriptText).split(" ").filter(w => w.length > 2);
+
+  const synonyms: Record<string, string[]> = {
+    "anggaran": ["dana", "biaya", "budget", "pendanaan", "uang", "keuangan", "rupiah", "juta", "150"],
+    "sewa": ["rental", "carter", "kontrak", "pinjam", "armada"],
+    "alat": ["excavator", "crane", "mesin", "armada", "truk", "loader", "peralatan"],
+    "logistik": ["supply", "pengiriman", "distribusi", "semen", "material", "truk", "armada", "pengangkutan", "koordinasi"],
+    "progress": ["progres", "perkembangan", "selesai", "pengerjaan", "capaian", "persen", "update", "hasil", "bekisting", "siap", "85%"],
+    "kolom": ["beton", "tiang", "balok", "struktur", "bekisting"],
+    "mitigasi": ["antisipasi", "solusi", "rencana", "strategi", "risiko", "hambatan", "kendala"],
+    "keamanan": ["backup", "keamanan", "cyber", "security", "aman", "sistem", "mfa"],
+    "server": ["server", "cloud", "database", "data"],
+    "mfa": ["mfa", "multi-factor", "authentication", "autentikasi", "password", "login"],
+    "integrasi": ["integrasi", "data", "keuangan", "divisi", "keuangan", "finance"],
+    "evaluasi": ["review", "bahas", "tinjau", "analisis", "diskusi"],
+    "keterlambatan": ["terhambat", "kendala", "masalah", "lambat", "kritis"]
+  };
+
+  let matchedWords: string[] = [];
+  let score = 0;
+
+  agendaWords.forEach(word => {
+    if (transcriptWords.includes(word)) {
+      matchedWords.push(word);
+      score += 1.0;
+    } else {
+      for (const [key, list] of Object.entries(synonyms)) {
+        if (word === key || list.includes(word)) {
+          const foundSynonym = list.find(syn => transcriptWords.includes(syn)) || (transcriptWords.includes(key) ? key : null);
+          if (foundSynonym) {
+            matchedWords.push(`${word} (${foundSynonym})`);
+            score += 0.85;
+            break;
+          }
+        }
+      }
+    }
+  });
+
+  const finalScore = agendaWords.length > 0 ? (score / agendaWords.length) * 100 : 0;
+  return { score: finalScore, matchedWords };
+};
+
 export const ActiveMeetingCanvas: React.FC<ActiveMeetingProps> = ({ meeting, onBack }) => {
   const {
     currentUser,
@@ -79,7 +143,122 @@ export const ActiveMeetingCanvas: React.FC<ActiveMeetingProps> = ({ meeting, onB
   } = useApp();
 
   // Active workspace tabs
-  const [activeTab, setActiveTab] = useState<"whiteboard" | "notes" | "polling" | "chat">("chat");
+  const [activeTab, setActiveTab] = useState<"whiteboard" | "notes" | "polling" | "chat" | "agenda">("agenda");
+
+  const [agendaItems, setAgendaItems] = useState<AgendaItem[]>(() => {
+    const saved = localStorage.getItem(`agenda_progress_${meeting.id}`);
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        console.error("Failed to parse saved agenda progress:", e);
+      }
+    }
+
+    if (!meeting.agenda) return [];
+    return meeting.agenda
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .map((line, idx) => {
+        const cleanText = line.replace(/^\d+[\.\)\-]\s*/, "").replace(/^[\-\*\+]\s*/, "").trim();
+        return {
+          id: `agenda-${idx + 1}`,
+          text: cleanText,
+          completed: false,
+        };
+      });
+  });
+
+  const [autoTrackingEnabled, setAutoTrackingEnabled] = useState<boolean>(() => {
+    const saved = localStorage.getItem(`agenda_auto_track_${meeting.id}`);
+    return saved !== "false";
+  });
+
+  const [lastProcessedTranscriptLength, setLastProcessedTranscriptLength] = useState(0);
+  const [agendaAlert, setAgendaAlert] = useState<{
+    show: boolean;
+    agendaTitle: string;
+    speaker: string;
+    score: number;
+  } | null>(null);
+
+  const [agendaMatchLogs, setAgendaMatchLogs] = useState<string[]>(() => {
+    const saved = localStorage.getItem(`agenda_match_logs_${meeting.id}`);
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  useEffect(() => {
+    localStorage.setItem(`agenda_progress_${meeting.id}`, JSON.stringify(agendaItems));
+  }, [agendaItems, meeting.id]);
+
+  useEffect(() => {
+    localStorage.setItem(`agenda_auto_track_${meeting.id}`, String(autoTrackingEnabled));
+  }, [autoTrackingEnabled, meeting.id]);
+
+  useEffect(() => {
+    localStorage.setItem(`agenda_match_logs_${meeting.id}`, JSON.stringify(agendaMatchLogs));
+  }, [agendaMatchLogs, meeting.id]);
+
+  useEffect(() => {
+    const transcript = meeting.transcript || [];
+    if (transcript.length === 0) {
+      setAgendaItems(prev => prev.map(item => item.manuallyChecked ? item : { ...item, completed: false, completedAt: undefined, speakerName: undefined, matchScore: undefined, matchedWords: undefined, matchedText: undefined }));
+      setLastProcessedTranscriptLength(0);
+      setAgendaMatchLogs([]);
+      return;
+    }
+
+    if (transcript.length > lastProcessedTranscriptLength) {
+      const newLines = transcript.slice(lastProcessedTranscriptLength);
+      setLastProcessedTranscriptLength(transcript.length);
+
+      if (!autoTrackingEnabled) return;
+
+      let updated = false;
+      const nextAgendaItems = [...agendaItems];
+      const nextLogs = [...agendaMatchLogs];
+
+      newLines.forEach((line) => {
+        nextAgendaItems.forEach((item) => {
+          if (item.completed) return;
+
+          const match = calculateMatchScore(item.text, line.text);
+          if (match.score >= 45) {
+            item.completed = true;
+            item.completedAt = line.timestamp;
+            item.speakerName = line.speakerName;
+            item.matchScore = Math.round(match.score);
+            item.matchedWords = match.matchedWords;
+            item.matchedText = line.text;
+            updated = true;
+
+            const logMessage = `[${line.timestamp}] TOPIK COCOK: "${item.text}" terdeteksi dari ucapan ${line.speakerName} dengan skor kecocokan ${Math.round(match.score)}% (Kata kunci: ${match.matchedWords.join(", ")})`;
+            nextLogs.unshift(logMessage);
+
+            setAgendaAlert({
+              show: true,
+              agendaTitle: item.text,
+              speaker: line.speakerName,
+              score: Math.round(match.score)
+            });
+
+            setSmartToast({
+              show: true,
+              type: "success",
+              message: "Topik Agenda Terdeteksi!",
+              details: `"${item.text}" otomatis ditandai selesai oleh AI (Kecocokan ${Math.round(match.score)}% dari ucapan ${line.speakerName})`
+            });
+          }
+        });
+      });
+
+      if (updated) {
+        setAgendaItems(nextAgendaItems);
+        setAgendaMatchLogs(nextLogs.slice(0, 30));
+      }
+    }
+  }, [meeting.transcript, lastProcessedTranscriptLength, agendaItems, autoTrackingEnabled, agendaMatchLogs]);
 
   // Offline Mode States
   const [isOfflineMode, setIsOfflineMode] = useState<boolean>(() => {
@@ -1461,6 +1640,25 @@ export const ActiveMeetingCanvas: React.FC<ActiveMeetingProps> = ({ meeting, onB
         {/* Left Video, Audio wave and Transcript canvas */}
         <div className="flex-1 flex flex-col min-h-0 overflow-y-auto border-r border-slate-800 bg-slate-900/40 p-4 space-y-4">
           
+          {/* Floating AI Topic Covered Notification Card */}
+          {agendaAlert && agendaAlert.show && (
+            <div className="bg-gradient-to-r from-emerald-950/90 to-teal-950/90 border border-emerald-500/40 p-3 rounded-xl flex items-center justify-between gap-3 shadow-lg shadow-emerald-950/25 animate-bounce z-40 shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-emerald-500/20 text-emerald-400 rounded-lg">
+                  <Sparkles size={16} className="animate-pulse" />
+                </div>
+                <div>
+                  <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">Agenda Tercakup via AI</h4>
+                  <p className="text-xs font-bold text-white leading-snug">"{agendaAlert.agendaTitle}"</p>
+                  <p className="text-[9px] text-emerald-400 font-medium">Dibahas oleh {agendaAlert.speaker} • Kecocokan {agendaAlert.score}%</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded text-[10px] font-bold">
+                <Check size={11} /> Completed
+              </div>
+            </div>
+          )}
+          
           {/* Grid of participant camera boxes */}
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
             {users.slice(0, 5).map((user, i) => (
@@ -1886,10 +2084,18 @@ export const ActiveMeetingCanvas: React.FC<ActiveMeetingProps> = ({ meeting, onB
         <div className="w-full md:w-96 flex flex-col min-h-0 border-t md:border-t-0 border-slate-800 bg-slate-950">
           
           {/* Navigation Tab indicators */}
-          <div className="flex border-b border-slate-800 bg-slate-900/40 text-xs">
+          <div className="flex border-b border-slate-800 bg-slate-900/40 text-xs overflow-x-auto scrollbar-none">
+            <button
+              onClick={() => setActiveTab("agenda")}
+              className={`flex-1 py-3 px-2 text-center border-b-2 font-medium cursor-pointer whitespace-nowrap transition-colors ${
+                activeTab === "agenda" ? "border-blue-500 text-blue-400" : "border-transparent text-slate-400 hover:text-slate-300"
+              }`}
+            >
+              Agenda Live
+            </button>
             <button
               onClick={() => setActiveTab("chat")}
-              className={`flex-1 py-3 text-center border-b-2 font-medium cursor-pointer ${
+              className={`flex-1 py-3 px-2 text-center border-b-2 font-medium cursor-pointer whitespace-nowrap transition-colors ${
                 activeTab === "chat" ? "border-blue-500 text-blue-400" : "border-transparent text-slate-400 hover:text-slate-300"
               }`}
             >
@@ -1897,7 +2103,7 @@ export const ActiveMeetingCanvas: React.FC<ActiveMeetingProps> = ({ meeting, onB
             </button>
             <button
               onClick={() => setActiveTab("whiteboard")}
-              className={`flex-1 py-3 text-center border-b-2 font-medium cursor-pointer ${
+              className={`flex-1 py-3 px-2 text-center border-b-2 font-medium cursor-pointer whitespace-nowrap transition-colors ${
                 activeTab === "whiteboard" ? "border-blue-500 text-blue-400" : "border-transparent text-slate-400 hover:text-slate-300"
               }`}
             >
@@ -1905,7 +2111,7 @@ export const ActiveMeetingCanvas: React.FC<ActiveMeetingProps> = ({ meeting, onB
             </button>
             <button
               onClick={() => setActiveTab("polling")}
-              className={`flex-1 py-3 text-center border-b-2 font-medium cursor-pointer ${
+              className={`flex-1 py-3 px-2 text-center border-b-2 font-medium cursor-pointer whitespace-nowrap transition-colors ${
                 activeTab === "polling" ? "border-blue-500 text-blue-400" : "border-transparent text-slate-400 hover:text-slate-300"
               }`}
             >
@@ -1913,7 +2119,7 @@ export const ActiveMeetingCanvas: React.FC<ActiveMeetingProps> = ({ meeting, onB
             </button>
             <button
               onClick={() => setActiveTab("notes")}
-              className={`flex-1 py-3 text-center border-b-2 font-medium cursor-pointer ${
+              className={`flex-1 py-3 px-2 text-center border-b-2 font-medium cursor-pointer whitespace-nowrap transition-colors ${
                 activeTab === "notes" ? "border-blue-500 text-blue-400" : "border-transparent text-slate-400 hover:text-slate-300"
               }`}
             >
@@ -1924,6 +2130,162 @@ export const ActiveMeetingCanvas: React.FC<ActiveMeetingProps> = ({ meeting, onB
           {/* Active Workspace Container */}
           <div className="flex-1 min-h-0 overflow-y-auto p-4">
             
+            {/* Real-time Intelligent Agenda Tracking Workspace */}
+            {activeTab === "agenda" && (
+              <div className="flex flex-col h-full space-y-4">
+                {/* Header info card */}
+                <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 space-y-2 shrink-0">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-200 flex items-center gap-1.5 font-display">
+                      <ListTodo size={14} className="text-blue-400 animate-pulse" />
+                      Pelacakan Agenda Real-time AI
+                    </span>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={autoTrackingEnabled}
+                        onChange={(e) => setAutoTrackingEnabled(e.target.checked)}
+                        className="sr-only peer"
+                      />
+                      <div className="w-8 h-4 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-slate-400 after:border-slate-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-blue-600 peer-checked:after:bg-white"></div>
+                      <span className="ml-1.5 text-[9px] font-bold text-slate-400 uppercase tracking-wider font-mono">
+                        {autoTrackingEnabled ? "Auto AI" : "Manual"}
+                      </span>
+                    </label>
+                  </div>
+
+                  {/* Progress stats */}
+                  {(() => {
+                    const total = agendaItems.length;
+                    const completed = agendaItems.filter(item => item.completed).length;
+                    const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+                    return (
+                      <div className="space-y-1.5">
+                        <div className="flex justify-between items-center text-[10px] font-mono text-slate-400">
+                          <span>Progres Rapat</span>
+                          <span className="font-bold text-blue-400">{completed}/{total} Agenda Selesai ({percent}%)</span>
+                        </div>
+                        <div className="w-full h-1.5 bg-slate-950 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-gradient-to-r from-blue-500 to-emerald-400 transition-all duration-500 rounded-full"
+                            style={{ width: `${percent}%` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {/* Agenda list */}
+                <div className="flex-1 overflow-y-auto space-y-2 max-h-[300px] pr-1">
+                  {agendaItems.length > 0 ? (
+                    agendaItems.map((item, idx) => {
+                      const isItemCompleted = item.completed;
+                      return (
+                        <div
+                          key={item.id}
+                          className={`p-3 rounded-xl border transition-all ${
+                            isItemCompleted
+                              ? "bg-emerald-950/20 border-emerald-500/20 shadow-sm shadow-emerald-950/10"
+                              : "bg-slate-900/40 border-slate-800 hover:border-slate-700 hover:bg-slate-900/60"
+                          }`}
+                        >
+                          <div className="flex items-start gap-2.5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setAgendaItems(prev => prev.map(a => {
+                                  if (a.id === item.id) {
+                                    const nextState = !a.completed;
+                                    return {
+                                      ...a,
+                                      completed: nextState,
+                                      manuallyChecked: true,
+                                      completedAt: nextState ? new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : undefined,
+                                      speakerName: nextState ? currentUser.name : undefined,
+                                      matchScore: nextState ? 100 : undefined,
+                                      matchedWords: undefined,
+                                      matchedText: undefined
+                                    };
+                                  }
+                                  return a;
+                                }));
+                              }}
+                              className={`mt-0.5 w-4 h-4 rounded border flex items-center justify-center transition-all shrink-0 cursor-pointer ${
+                                isItemCompleted
+                                  ? "bg-emerald-500 border-emerald-400 text-slate-950"
+                                  : "border-slate-700 hover:border-slate-500 bg-slate-950"
+                              }`}
+                            >
+                              {isItemCompleted && <Check size={11} strokeWidth={3} />}
+                            </button>
+
+                            <div className="flex-1 min-w-0">
+                              <span className={`text-xs font-semibold block leading-tight ${isItemCompleted ? "text-slate-400 line-through" : "text-slate-200"}`}>
+                                {idx + 1}. {item.text}
+                              </span>
+
+                              {isItemCompleted && (
+                                <div className="mt-1.5 flex flex-col gap-1 text-[9px] text-slate-400 font-mono">
+                                  <div className="flex items-center gap-1.5 text-emerald-400">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                                    <span>
+                                      {item.manuallyChecked ? "Diverifikasi Manual" : `Terdeteksi Otomatis (${item.matchScore}% Cocok)`}
+                                    </span>
+                                    {item.completedAt && <span>• Pukul {item.completedAt}</span>}
+                                  </div>
+
+                                  {item.speakerName && (
+                                    <div className="text-slate-500">
+                                      Pembicara: <span className="font-semibold text-blue-400">{item.speakerName}</span>
+                                    </div>
+                                  )}
+
+                                  {item.matchedText && (
+                                    <p className="mt-0.5 text-slate-500 italic max-w-full truncate" title={item.matchedText}>
+                                      "{item.matchedText}"
+                                    </p>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="py-8 text-center text-slate-500 border border-dashed border-slate-800 rounded-xl">
+                      <p className="text-[10px] leading-relaxed px-4 text-slate-400">
+                        Tidak ada poin agenda yang ditemukan untuk rapat ini.
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* AI Matching Logs Console */}
+                <div className="bg-slate-950 rounded-xl p-3 border border-slate-900 shrink-0 space-y-1.5">
+                  <div className="flex items-center justify-between text-[9px] font-bold text-slate-400 uppercase tracking-wider font-mono">
+                    <span>Aktivitas Deteksi Topik AI</span>
+                    <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-ping"></span>
+                  </div>
+                  
+                  <div className="bg-slate-900/50 rounded-lg p-2 font-mono text-[9px] text-slate-400 border border-slate-800/60 max-h-[85px] overflow-y-auto leading-relaxed space-y-1">
+                    {agendaMatchLogs.length > 0 ? (
+                      agendaMatchLogs.map((log, idx) => (
+                        <div key={idx} className="border-b border-slate-800/30 pb-1 last:border-0 last:pb-0">
+                          {log}
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-slate-600 italic">
+                        [Sistem Siaga] Menunggu aktivitas vokal transkrip untuk melacak agenda secara otomatis...
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Whiteboard Workspace */}
             {activeTab === "whiteboard" && (
               <div className="flex flex-col h-full space-y-3">

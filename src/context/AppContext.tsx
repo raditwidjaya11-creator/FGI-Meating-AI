@@ -4,7 +4,7 @@
  */
 
 import React, { createContext, useContext, useState, useEffect } from "react";
-import { User, UserRole, Meeting, Decision, ActionItem, MasterData, ChatMessage, Poll, MeetingTranscriptLine } from "../types";
+import { User, UserRole, Meeting, Decision, ActionItem, MasterData, ChatMessage, Poll, MeetingTranscriptLine, Delegation, AppToast } from "../types";
 import { DEFAULT_USERS, DEFAULT_MASTER_DATA, DEFAULT_MEETINGS, DEFAULT_DECISIONS, DEFAULT_ACTION_ITEMS } from "../data";
 
 interface AppContextProps {
@@ -14,6 +14,11 @@ interface AppContextProps {
   decisions: Decision[];
   actionItems: ActionItem[];
   masterData: MasterData;
+  delegations: Delegation[];
+  toasts: AppToast[];
+  addToast: (toast: Omit<AppToast, "id">) => void;
+  removeToast: (id: string) => void;
+  playChime: () => void;
   setCurrentUser: (user: User) => void;
   // Master data management
   addMasterItem: (category: keyof MasterData, item: string) => void;
@@ -21,6 +26,9 @@ interface AppContextProps {
   addMeeting: (meeting: Meeting) => void;
   updateMeeting: (meeting: Meeting) => void;
   deleteMeeting: (id: string) => void;
+  // Delegation management
+  addDelegation: (delegation: Delegation) => void;
+  deleteDelegation: (id: string) => void;
   // Active ongoing meeting states
   activeMeetingId: string | null;
   setActiveMeetingId: (id: string | null) => void;
@@ -86,15 +94,142 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return saved ? JSON.parse(saved) : DEFAULT_MASTER_DATA;
   });
 
+  const [delegations, setDelegations] = useState<Delegation[]>(() => {
+    const saved = localStorage.getItem("fgi_delegations");
+    return saved ? JSON.parse(saved) : [];
+  });
+
   const [darkMode, setDarkMode] = useState<boolean>(() => {
     const saved = localStorage.getItem("fgi_dark_mode");
     return saved === "true";
   });
 
+  const [toasts, setToasts] = useState<AppToast[]>([]);
+  const [notifiedMeetings, setNotifiedMeetings] = useState<Record<string, boolean>>({});
+
+  const playChime = () => {
+    try {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContextClass) return;
+      const ctx = new AudioContextClass();
+      
+      const osc1 = ctx.createOscillator();
+      const gain1 = ctx.createGain();
+      osc1.type = "sine";
+      osc1.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+      gain1.gain.setValueAtTime(0.12, ctx.currentTime);
+      gain1.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+      osc1.connect(gain1);
+      gain1.connect(ctx.destination);
+      osc1.start();
+      osc1.stop(ctx.currentTime + 0.5);
+      
+      setTimeout(() => {
+        const osc2 = ctx.createOscillator();
+        const gain2 = ctx.createGain();
+        osc2.type = "sine";
+        osc2.frequency.setValueAtTime(698.46, ctx.currentTime); // F5
+        gain2.gain.setValueAtTime(0.12, ctx.currentTime);
+        gain2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
+        osc2.connect(gain2);
+        gain2.connect(ctx.destination);
+        osc2.start();
+        osc2.stop(ctx.currentTime + 0.6);
+      }, 140);
+    } catch (e) {
+      console.warn("Audio chime prevented by browser:", e);
+    }
+  };
+
+  const addToast = (toast: Omit<AppToast, "id">) => {
+    const id = `toast-${Date.now()}`;
+    const newToast = { ...toast, id };
+    setToasts((prev) => [newToast, ...prev]);
+
+    if (toast.type === "meeting" || toast.type === "reminder" || toast.type === "warning") {
+      playChime();
+    }
+
+    if (toast.duration !== 0) {
+      setTimeout(() => {
+        removeToast(id);
+      }, toast.duration || 6000);
+    }
+  };
+
+  const removeToast = (id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  };
+
   // Active meeting states
   const [activeMeetingId, setActiveMeetingId] = useState<string | null>(null);
   const [isRecording, setIsRecording] = useState<boolean>(false);
   const [recordingDuration, setRecordingDuration] = useState<number>(0);
+
+  // Auto scanning for scheduled meetings starting soon
+  useEffect(() => {
+    const checkUpcomingMeetings = () => {
+      const now = new Date();
+      const todayStr = now.toISOString().split("T")[0]; // YYYY-MM-DD
+      const currentHours = now.getHours();
+      const currentMins = now.getMinutes();
+      const currentMinutesOfDay = currentHours * 60 + currentMins;
+
+      meetings.forEach((m) => {
+        if (m.status !== "Scheduled") return;
+
+        // Verify meeting date matches today's date
+        if (m.date !== todayStr) return;
+
+        // Parse start time (e.g., "10:00")
+        try {
+          const parts = m.startTime.split(":");
+          if (parts.length < 2) return;
+          const mHours = parseInt(parts[0], 10);
+          const mMins = parseInt(parts[1], 10);
+          if (isNaN(mHours) || isNaN(mMins)) return;
+
+          const meetingMinutesOfDay = mHours * 60 + mMins;
+          const diffMinutes = meetingMinutesOfDay - currentMinutesOfDay;
+
+          // If the meeting starts in 15 minutes or less (and hasn't started yet),
+          // or is starting exactly now, trigger a reminder toast!
+          if (diffMinutes >= 0 && diffMinutes <= 15) {
+            const notifiedKey = `${m.id}-${diffMinutes <= 0 ? "started" : "upcoming"}`;
+            
+            // Only trigger if we haven't notified for this specific threshold yet
+            if (!notifiedMeetings[notifiedKey]) {
+              setNotifiedMeetings((prev) => ({ ...prev, [notifiedKey]: true }));
+
+              // Trigger elegant custom toast
+              addToast({
+                title: diffMinutes === 0 ? "🚨 Rapat Dimulai Sekarang!" : `📢 Pengingat: Rapat dalam ${diffMinutes} menit`,
+                message: `"${m.title}" akan segera dimulai di ${m.locationDetail}.`,
+                type: "meeting",
+                meeting: m,
+                duration: 15000 // Keep it visible for 15s so they can action it
+              });
+
+              // Trigger native browser notification if allowed
+              if ("Notification" in window && Notification.permission === "granted") {
+                new Notification(diffMinutes === 0 ? "🚨 Rapat Dimulai Sekarang!" : "📢 Pengingat Rapat", {
+                  body: `"${m.title}" akan dimulai pukul ${m.startTime} di ${m.locationDetail}.`,
+                  icon: "/favicon.ico"
+                });
+              }
+            }
+          }
+        } catch (err) {
+          console.error("Error parsing meeting time:", err);
+        }
+      });
+    };
+
+    const interval = setInterval(checkUpcomingMeetings, 10000);
+    checkUpcomingMeetings();
+
+    return () => clearInterval(interval);
+  }, [meetings, notifiedMeetings]);
 
   // Sync state to local storage
   useEffect(() => {
@@ -120,6 +255,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     localStorage.setItem("fgi_master_data", JSON.stringify(masterData));
   }, [masterData]);
+
+  useEffect(() => {
+    localStorage.setItem("fgi_delegations", JSON.stringify(delegations));
+  }, [delegations]);
 
   useEffect(() => {
     localStorage.setItem("fgi_dark_mode", String(darkMode));
@@ -168,6 +307,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const deleteMeeting = (id: string) => {
     setMeetings((prev) => prev.filter((m) => m.id !== id));
+  };
+
+  const addDelegation = (delegation: Delegation) => {
+    setDelegations((prev) => [delegation, ...prev]);
+  };
+
+  const deleteDelegation = (id: string) => {
+    setDelegations((prev) => prev.filter((d) => d.id !== id));
   };
 
   const sendMeetingChat = (meetingId: string, text: string) => {
@@ -498,11 +645,18 @@ Ditemukan ${meetings.length} Rapat, ${decisions.length} Keputusan, ${actionItems
         decisions,
         actionItems,
         masterData,
+        delegations,
+        toasts,
+        addToast,
+        removeToast,
+        playChime,
         setCurrentUser,
         addMasterItem,
         addMeeting,
         updateMeeting,
         deleteMeeting,
+        addDelegation,
+        deleteDelegation,
         activeMeetingId,
         setActiveMeetingId,
         isRecording,

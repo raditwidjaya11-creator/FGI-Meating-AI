@@ -180,3 +180,13 @@ export interface Delegation {
   status: "Approved" | "Pending" | "Rejected";
 }
 
+export interface AppToast {
+  id: string;
+  title: string;
+  message: string;
+  type: "info" | "warning" | "success" | "meeting" | "reminder";
+  meeting?: Meeting;
+  duration?: number; // millisecond duration
+}
+
+

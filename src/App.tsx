@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { AppProvider, useApp } from "./context/AppContext";
 import { Sidebar } from "./components/Sidebar";
 import { DashboardView } from "./components/DashboardView";
@@ -15,20 +15,36 @@ import { KnowledgeBaseView } from "./components/KnowledgeBaseView";
 import { ReportsAnalyticsView } from "./components/ReportsAnalyticsView";
 import { MasterDataView } from "./components/MasterDataView";
 import { ActiveMeetingCanvas } from "./components/ActiveMeetingCanvas";
+import { ToastContainer } from "./components/ToastContainer";
 import { Meeting } from "./types";
 
 function AppContent() {
-  const { darkMode } = useApp();
+  const { darkMode, activeMeetingId, setActiveMeetingId, meetings } = useApp();
   const [activeTab, setActiveTab] = useState("dashboard");
   const [collapsed, setCollapsed] = useState(false);
   const [activeMeeting, setActiveMeeting] = useState<Meeting | null>(null);
+
+  // Sync activeMeetingId from context to local ActiveMeeting state
+  useEffect(() => {
+    if (activeMeetingId) {
+      const mtg = meetings.find((m) => m.id === activeMeetingId);
+      if (mtg) {
+        setActiveMeeting(mtg);
+      }
+    } else {
+      setActiveMeeting(null);
+    }
+  }, [activeMeetingId, meetings]);
 
   const renderTabContent = () => {
     if (activeMeeting) {
       return (
         <ActiveMeetingCanvas
           meeting={activeMeeting}
-          onBack={() => setActiveMeeting(null)}
+          onBack={() => {
+            setActiveMeetingId(null);
+            setActiveMeeting(null);
+          }}
         />
       );
     }
@@ -127,6 +143,7 @@ function AppContent() {
           <div>Version 2.4.0 • © 2026 FGi Systems</div>
         </footer>
       </div>
+      <ToastContainer />
     </div>
   );
 }
