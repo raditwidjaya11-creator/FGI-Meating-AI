@@ -34,6 +34,11 @@ import {
   MoreVertical,
   ExternalLink,
   Volume2,
+  VolumeX,
+  Pin,
+  PinOff,
+  Smile,
+  Maximize2,
   Keyboard,
   Cloud,
   CloudOff,
@@ -361,6 +366,94 @@ export const ActiveMeetingCanvas: React.FC<ActiveMeetingProps> = ({ meeting, onB
   const [micActive, setMicActive] = useState(true);
   const [videoActive, setVideoActive] = useState(true);
   const [screenShareActive, setScreenShareActive] = useState(false);
+
+  // Live Video Call Engine states
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [hasCameraPermission, setHasCameraPermission] = useState<boolean | null>(null);
+  const [pinnedUserId, setPinnedUserId] = useState<string | null>(null);
+  const [videoFilter, setVideoFilter] = useState<string>("none"); // 'none', 'grayscale', 'sepia', 'vintage', 'neon', 'blur'
+  const [mutedParticipants, setMutedParticipants] = useState<Record<string, boolean>>({});
+  const [virtualBackground, setVirtualBackground] = useState<string>("office"); // 'office', 'cyberpunk', 'minimal', 'space', 'blur'
+  const [emojiReactions, setEmojiReactions] = useState<Record<string, { id: number; emoji: string; ts: number }[]>>({});
+
+  const localVideoRef = useRef<HTMLVideoElement | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+
+  const triggerEmojiReaction = (userId: string, emoji: string) => {
+    const reactionId = Date.now() + Math.random();
+    setEmojiReactions((prev) => ({
+      ...prev,
+      [userId]: [...(prev[userId] || []), { id: reactionId, emoji, ts: Date.now() }].slice(-5),
+    }));
+
+    setTimeout(() => {
+      setEmojiReactions((prev) => {
+        const list = prev[userId] || [];
+        return {
+          ...prev,
+          [userId]: list.filter((r) => r.id !== reactionId),
+        };
+      });
+    }, 2500);
+  };
+
+  useEffect(() => {
+    async function startCamera() {
+      if (videoActive) {
+        try {
+          if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+            const stream = await navigator.mediaDevices.getUserMedia({
+              video: { width: 480, height: 360, frameRate: { ideal: 15 } },
+              audio: false
+            });
+            setLocalStream(stream);
+            localStreamRef.current = stream;
+            setHasCameraPermission(true);
+            if (localVideoRef.current) {
+              localVideoRef.current.srcObject = stream;
+            }
+          } else {
+            console.warn("getUserMedia not supported");
+            setHasCameraPermission(false);
+          }
+        } catch (err) {
+          console.error("Camera access failed", err);
+          setHasCameraPermission(false);
+          setSmartToast({
+            show: true,
+            type: "info",
+            message: "Iframe Sandbox: Kamera Fisik Dibatasi",
+            details: "Mengaktifkan simulasi umpan video interaktif kualitas tinggi."
+          });
+        }
+      } else {
+        stopCamera();
+      }
+    }
+
+    startCamera();
+
+    return () => {
+      stopCamera();
+    };
+
+    function stopCamera() {
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach(track => track.stop());
+        localStreamRef.current = null;
+      }
+      setLocalStream(null);
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = null;
+      }
+    }
+  }, [videoActive]);
+
+  useEffect(() => {
+    if (localVideoRef.current && localStream) {
+      localVideoRef.current.srcObject = localStream;
+    }
+  }, [localStream]);
 
   // Drawing whiteboard ref & state
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -1659,79 +1752,268 @@ export const ActiveMeetingCanvas: React.FC<ActiveMeetingProps> = ({ meeting, onB
             </div>
           )}
           
-          {/* Grid of participant camera boxes */}
-          <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
-            {users.slice(0, 5).map((user, i) => (
-              <div
-                key={user.id}
-                className="relative bg-slate-900 aspect-video rounded-xl overflow-hidden border border-slate-800/80 shadow-md group"
-              >
-                {videoActive && (i < 3 || i === 4) ? (
-                  <div className="w-full h-full relative">
-                    <img
-                      src={user.avatar}
-                      alt={user.name}
-                      className="w-full h-full object-cover blur-sm opacity-25"
-                    />
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <div className="w-16 h-16 rounded-full overflow-hidden border-2 border-slate-500 shadow-xl">
-                        <img src={user.avatar} className="w-full h-full object-cover" alt="" />
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950">
-                    <div className="w-12 h-12 rounded-full bg-slate-800 flex items-center justify-center font-bold text-md text-slate-400">
-                      {user.name.charAt(0)}
-                    </div>
-                    <span className="text-[10px] text-slate-500 mt-2">Kamera Nonaktif</span>
-                  </div>
-                )}
+          {/* Interactive Video Call Hub Control Panel */}
+          <div className="bg-slate-950/80 border border-slate-800/80 rounded-xl p-3 flex flex-wrap items-center justify-between gap-3 shrink-0">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-blue-500/10 text-blue-400 rounded-lg">
+                <Video size={16} className="animate-pulse" />
+              </div>
+              <div>
+                <h3 className="text-xs font-bold text-slate-200">Video Call Terintegrasi</h3>
+                <p className="text-[10px] text-slate-500">Kamera WebRTC Real-time & Reaksi Efek AI</p>
+              </div>
+            </div>
 
-                {/* Left floating AI role tag */}
-                {(() => {
-                  const scoreInfo = engagementScores[user.id];
-                  if (!scoreInfo) return null;
-                  return (
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Filter Picker */}
+              <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 rounded-lg px-2 py-1">
+                <span className="text-[9px] font-mono text-slate-500 uppercase tracking-wider mr-1">Filter:</span>
+                <select
+                  value={videoFilter}
+                  onChange={(e) => setVideoFilter(e.target.value)}
+                  className="bg-transparent text-[10px] font-bold text-slate-300 border-none outline-none focus:ring-0 cursor-pointer"
+                >
+                  <option value="none" className="bg-slate-950 text-slate-300">Normal</option>
+                  <option value="grayscale" className="bg-slate-950 text-slate-300">Monokrom</option>
+                  <option value="sepia" className="bg-slate-950 text-slate-300">Sepia</option>
+                  <option value="neon" className="bg-slate-950 text-slate-300">Neon Cyber</option>
+                  <option value="vintage" className="bg-slate-950 text-slate-300">Vintage</option>
+                  <option value="matrix" className="bg-slate-950 text-slate-300">Matrix</option>
+                  <option value="blur" className="bg-slate-950 text-slate-300">Blur</option>
+                </select>
+              </div>
+
+              {/* Background Picker */}
+              <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 rounded-lg px-2 py-1">
+                <span className="text-[9px] font-mono text-slate-500 uppercase tracking-wider mr-1">Latar:</span>
+                <select
+                  value={virtualBackground}
+                  onChange={(e) => setVirtualBackground(e.target.value)}
+                  className="bg-transparent text-[10px] font-bold text-slate-300 border-none outline-none focus:ring-0 cursor-pointer"
+                >
+                  <option value="office" className="bg-slate-950 text-slate-300">Ruang Kerja</option>
+                  <option value="cyberpunk" className="bg-slate-950 text-slate-300">Neon Cyber</option>
+                  <option value="space" className="bg-slate-950 text-slate-300">Cosmos Space</option>
+                  <option value="minimal" className="bg-slate-950 text-slate-300">Slate Gelap</option>
+                </select>
+              </div>
+
+              {/* Instant reactions bar */}
+              <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 rounded-lg px-2 py-1">
+                <span className="text-[9px] font-mono text-slate-500 uppercase tracking-wider mr-1.5">Reaksi:</span>
+                <div className="flex items-center gap-1">
+                  {["👍", "❤️", "👏", "😂", "🎉", "😮"].map((emoji) => (
+                    <button
+                      key={emoji}
+                      onClick={() => triggerEmojiReaction(currentUser.id, emoji)}
+                      className="hover:scale-125 hover:rotate-12 transition-transform text-xs px-1 cursor-pointer"
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {pinnedUserId && (
+                <button
+                  onClick={() => setPinnedUserId(null)}
+                  className="px-2 py-1 bg-red-950/40 hover:bg-red-900/40 text-red-400 border border-red-500/20 rounded-lg text-[10px] font-bold cursor-pointer transition-colors"
+                >
+                  Batal Pin
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Grid of participant camera boxes */}
+          {(() => {
+            // Get filter styles
+            let filterStyle = "";
+            if (videoFilter === "grayscale") filterStyle = "grayscale contrast-125";
+            else if (videoFilter === "sepia") filterStyle = "sepia contrast-110 brightness-95";
+            else if (videoFilter === "neon") filterStyle = "hue-rotate-240 saturate-200 brightness-110";
+            else if (videoFilter === "vintage") filterStyle = "sepia-50 hue-rotate-[-15deg] contrast-125 brightness-90";
+            else if (videoFilter === "matrix") filterStyle = "hue-rotate-[90deg] saturate-150 contrast-125 brightness-75";
+            else if (videoFilter === "blur") filterStyle = "blur-[2px]";
+
+            // Background styles
+            let bgStyle = "bg-slate-900";
+            if (virtualBackground === "cyberpunk") bgStyle = "bg-gradient-to-tr from-fuchsia-950/40 via-purple-950/40 to-blue-950/40";
+            else if (virtualBackground === "space") bgStyle = "bg-gradient-to-b from-indigo-950/40 via-slate-950 to-blue-950/20";
+            else if (virtualBackground === "minimal") bgStyle = "bg-slate-950";
+            else bgStyle = "bg-gradient-to-br from-slate-900 to-slate-800";
+
+            // Define card renderer lambda
+            const renderCard = (user: User, i: number, isLargeStage = false) => {
+              const isLocalUser = user.id === currentUser.id;
+              const isMuted = mutedParticipants[user.id] || false;
+              const scoreInfo = engagementScores[user.id];
+              const isSpeaking = scoreInfo && scoreInfo.speakPercentage > 10;
+              const isTopSpeaker = scoreInfo && Object.values(engagementScores).every((other: any) => (other.speakPercentage || 0) <= (scoreInfo.speakPercentage || 0)) && scoreInfo.speakPercentage > 10;
+
+              return (
+                <div
+                  key={user.id}
+                  className={`relative aspect-video rounded-xl overflow-hidden border shadow-lg group transition-all duration-300 ${
+                    isSpeaking 
+                      ? "border-amber-500 shadow-amber-500/15 ring-2 ring-amber-500/20" 
+                      : "border-slate-800/80 hover:border-slate-700"
+                  } ${isLargeStage ? "w-full aspect-[21/9] md:aspect-video" : ""} ${bgStyle}`}
+                >
+                  {/* Floating emoji reactions bubble */}
+                  {emojiReactions[user.id] && (
+                    <div className="absolute bottom-12 right-4 flex flex-col gap-1.5 z-30 pointer-events-none">
+                      {emojiReactions[user.id].map((react) => (
+                        <span
+                          key={react.id}
+                          className="text-3xl animate-floatUp opacity-0 select-none filter drop-shadow-md"
+                        >
+                          {react.emoji}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Render camera stream / beautiful simulated video stream */}
+                  {videoActive && (i < 3 || i === 4 || isLocalUser) ? (
+                    isLocalUser ? (
+                      hasCameraPermission ? (
+                        <div className="w-full h-full relative">
+                          <video
+                            ref={localVideoRef}
+                            autoPlay
+                            playsInline
+                            muted
+                            className={`w-full h-full object-cover transform -scale-x-100 ${filterStyle}`}
+                          />
+                          <div className="absolute top-2 left-2 bg-blue-500/20 backdrop-blur-md px-2 py-0.5 rounded text-[8px] font-bold text-blue-400 font-mono uppercase tracking-wider z-10 border border-blue-500/30">
+                            🔴 Kamera Anda Aktif
+                          </div>
+                        </div>
+                      ) : (
+                        /* Beautiful fall back simulation for Sandboxed frames / restricted permissions */
+                        <div className="w-full h-full relative flex items-center justify-center overflow-hidden bg-slate-950/90">
+                          <div className="absolute inset-0 bg-radial-gradient from-blue-500/10 to-transparent animate-pulse" />
+                          <div className="absolute w-32 h-32 border border-blue-500/20 rounded-full animate-ping opacity-25" />
+                          
+                          <div className="z-10 flex flex-col items-center">
+                            <div className="relative">
+                              <div className="w-16 h-16 rounded-full overflow-hidden border-2 border-blue-500/50 shadow-lg shadow-blue-500/20">
+                                <img src={user.avatar} className="w-full h-full object-cover" alt="" />
+                              </div>
+                              <div className="absolute -bottom-1 -right-1 p-1 bg-blue-500 rounded-full text-slate-950 border border-slate-900 animate-bounce">
+                                <Sparkles size={10} className="text-white" />
+                              </div>
+                            </div>
+                            <span className="text-[10px] text-blue-400 font-bold mt-2 tracking-wide font-mono uppercase">Simulasi Kamera</span>
+                            <span className="text-[8px] text-slate-500">Akses Fisik Iframe Dibatasi</span>
+                          </div>
+                        </div>
+                      )
+                    ) : (
+                      /* Live animated feed representing participant camera stream */
+                      <div className="w-full h-full relative">
+                        <img
+                          src={user.avatar}
+                          alt={user.name}
+                          className="w-full h-full object-cover blur-sm opacity-20 scale-110"
+                        />
+                        <div className="absolute inset-0 bg-gradient-to-b from-slate-950/10 via-transparent to-slate-950/20 pointer-events-none" />
+                        <div className="absolute inset-0 opacity-[0.03] bg-scanlines pointer-events-none" />
+
+                        <div className="absolute inset-0 flex items-center justify-center">
+                          <div className={`relative transition-transform duration-500 ${isSpeaking ? "scale-110" : "scale-100"}`}>
+                            <div className={`w-16 h-16 rounded-full overflow-hidden border-2 shadow-xl ${
+                              isSpeaking ? "border-amber-500 ring-4 ring-amber-500/10" : "border-slate-600"
+                            }`}>
+                              <img src={user.avatar} className="w-full h-full object-cover" alt="" />
+                            </div>
+
+                            {isSpeaking && (
+                              <span className="absolute -inset-1 rounded-full border-2 border-amber-500 animate-ping opacity-75 pointer-events-none" />
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Top-to-bottom scan line */}
+                        <div className="absolute top-0 left-0 right-0 h-[2px] bg-blue-500/15 animate-scanline pointer-events-none" />
+                      </div>
+                    )
+                  ) : (
+                    /* Off camera view */
+                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950">
+                      <div className="w-12 h-12 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center font-bold text-md text-slate-400 shadow-inner">
+                        {user.name.charAt(0)}
+                      </div>
+                      <span className="text-[10px] text-slate-500 mt-2 font-medium font-mono uppercase tracking-wider">Kamera Nonaktif</span>
+                    </div>
+                  )}
+
+                  {/* Top Left Floating Role Tag */}
+                  {scoreInfo && (
                     <div className="absolute top-2 left-2 bg-slate-950/80 backdrop-blur-md px-1.5 py-0.5 rounded border border-blue-500/20 text-[8px] font-bold text-blue-400 flex items-center gap-1 font-mono uppercase tracking-wider z-10">
                       <Sparkles size={7} className="animate-pulse" />
                       {scoreInfo.contributionLabel}
                     </div>
-                  );
-                })()}
+                  )}
 
-                {/* Bottom Speaker Tag & Name */}
-                <div className="absolute bottom-2 left-2 bg-slate-950/80 backdrop-blur-md px-2 py-1 rounded-lg text-[10px] flex items-center gap-1.5 border border-slate-800 text-slate-300 z-10">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                  <span className="font-medium truncate max-w-[100px]">{user.name}</span>
-                </div>
+                  {/* Bottom Speaker Tag & Name */}
+                  <div className="absolute bottom-2 left-2 bg-slate-950/80 backdrop-blur-md px-2 py-1 rounded-lg text-[10px] flex items-center gap-1.5 border border-slate-800 text-slate-300 z-10">
+                    <span className={`w-1.5 h-1.5 rounded-full ${isSpeaking ? "bg-amber-500 animate-pulse" : "bg-emerald-500"}`}></span>
+                    <span className="font-bold truncate max-w-[110px]">{user.name} {isLocalUser && "(Anda)"}</span>
+                  </div>
 
-                {/* Top right mic & speak share pill */}
-                {(() => {
-                  const scoreInfo = engagementScores[user.id];
-                  const isTopSpeaker = scoreInfo && Object.values(engagementScores).every((other: any) => (other.speakPercentage || 0) <= (scoreInfo.speakPercentage || 0)) && scoreInfo.speakPercentage > 10;
-                  return (
-                    <div className="absolute top-2 right-2 flex items-center gap-1 z-10">
-                      {scoreInfo && (
-                        <span className={`px-1 py-0.5 rounded text-[8px] font-bold font-mono ${
-                          isTopSpeaker ? "bg-amber-500/10 text-amber-400 border border-amber-500/25" : "bg-slate-950/80 text-slate-300 border border-slate-800"
-                        }`}>
-                          {isTopSpeaker && "👑 "}
-                          {scoreInfo.speakPercentage}% Speak
-                        </span>
-                      )}
-                      <span className="p-1 rounded bg-slate-950/80 border border-slate-800 text-slate-400 flex items-center">
-                        {i === 0 ? <Mic className="w-3 h-3 text-blue-400" /> : <Mic className="w-3 h-3 text-slate-500" />}
+                  {/* Top Right Controls & Metrics */}
+                  <div className="absolute top-2 right-2 flex items-center gap-1 z-10">
+                    {scoreInfo && (
+                      <span className={`px-1 py-0.5 rounded text-[8px] font-bold font-mono ${
+                        isTopSpeaker ? "bg-amber-500/10 text-amber-400 border border-amber-500/25" : "bg-slate-950/80 text-slate-300 border border-slate-800"
+                      }`}>
+                        {isTopSpeaker && "👑 "}
+                        {scoreInfo.speakPercentage}% Speak
                       </span>
-                    </div>
-                  );
-                })()}
+                    )}
 
-                {/* Progress bar representing AI-calculated contribution score */}
-                {(() => {
-                  const scoreInfo = engagementScores[user.id];
-                  if (!scoreInfo) return null;
-                  return (
+                    {/* Pin button */}
+                    <button
+                      onClick={() => setPinnedUserId(pinnedUserId === user.id ? null : user.id)}
+                      title={pinnedUserId === user.id ? "Lepas Pin" : "Sematkan Video"}
+                      className={`p-1 rounded bg-slate-950/85 border transition-colors flex items-center justify-center cursor-pointer ${
+                        pinnedUserId === user.id 
+                          ? "border-blue-500 text-blue-400" 
+                          : "border-slate-800 text-slate-400 hover:text-white"
+                      }`}
+                    >
+                      {pinnedUserId === user.id ? <PinOff size={10} /> : <Pin size={10} />}
+                    </button>
+
+                    {/* Mute toggle button */}
+                    <button
+                      onClick={() => setMutedParticipants(prev => ({ ...prev, [user.id]: !isMuted }))}
+                      title={isMuted ? "Suara Aktif" : "Senyapkan"}
+                      className={`p-1 rounded bg-slate-950/85 border transition-colors flex items-center justify-center cursor-pointer ${
+                        isMuted 
+                          ? "border-red-500 text-red-500" 
+                          : "border-slate-800 text-slate-400 hover:text-white"
+                      }`}
+                    >
+                      {isMuted ? <VolumeX size={10} /> : <Volume2 size={10} />}
+                    </button>
+
+                    {/* Custom reaction triggers */}
+                    {!isLocalUser && (
+                      <button
+                        onClick={() => triggerEmojiReaction(user.id, "👏")}
+                        title="Tepuk Tangan"
+                        className="p-1 rounded bg-slate-950/85 border border-slate-800 text-slate-400 hover:text-white hover:scale-105 flex items-center justify-center cursor-pointer"
+                      >
+                        <Smile size={10} />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Progress bar of AI-calculated score */}
+                  {scoreInfo && (
                     <div className="absolute bottom-0 left-0 right-0 h-1 bg-slate-950 overflow-hidden z-10">
                       <div 
                         className="h-full bg-gradient-to-r from-blue-500 to-emerald-400 transition-all duration-500"
@@ -1739,19 +2021,15 @@ export const ActiveMeetingCanvas: React.FC<ActiveMeetingProps> = ({ meeting, onB
                         title={`Kualitas Kontribusi: ${scoreInfo.contributionScore}%`}
                       ></div>
                     </div>
-                  );
-                })()}
+                  )}
 
-                {/* Hover overlay with detail text */}
-                {(() => {
-                  const scoreInfo = engagementScores[user.id];
-                  if (!scoreInfo) return null;
-                  return (
+                  {/* Full Detail Analytics on Hover */}
+                  {scoreInfo && (
                     <div className="absolute inset-0 bg-slate-950/90 flex flex-col justify-center p-3 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none text-left space-y-1 z-20">
                       <div className="flex items-center gap-1.5">
                         <Sparkles size={11} className="text-blue-400" />
                         <span className="text-[10px] font-bold text-slate-200 uppercase tracking-wider font-mono">
-                          Gaya Kontribusi AI
+                          Kontribusi Video AI
                         </span>
                       </div>
                       <p className="text-xs text-slate-100 font-semibold">
@@ -1768,12 +2046,50 @@ export const ActiveMeetingCanvas: React.FC<ActiveMeetingProps> = ({ meeting, onB
                         <span>Kualitas Kontribusi:</span>
                         <span className="font-bold text-emerald-400">{scoreInfo.contributionScore}%</span>
                       </div>
+                      {isMuted && (
+                        <div className="text-[9px] text-red-400 font-bold font-mono">
+                          🔇 AUDIO DIMUTE SECARA LOKAL
+                        </div>
+                      )}
                     </div>
-                  );
-                })()}
+                  )}
+                </div>
+              );
+            };
+
+            const slicedUsers = users.slice(0, 5);
+
+            if (pinnedUserId) {
+              const pinnedUser = users.find(u => u.id === pinnedUserId);
+              const otherUsers = slicedUsers.filter(u => u.id !== pinnedUserId);
+              const pinnedIdx = slicedUsers.findIndex(u => u.id === pinnedUserId);
+
+              return (
+                <div className="flex flex-col gap-3">
+                  {/* Large Pinned Stage */}
+                  {pinnedUser && (
+                    <div className="w-full">
+                      {renderCard(pinnedUser, pinnedIdx, true)}
+                    </div>
+                  )}
+
+                  {/* Thumbnails grid */}
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    {otherUsers.map((user) => {
+                      const idx = slicedUsers.findIndex(u => u.id === user.id);
+                      return renderCard(user, idx, false);
+                    })}
+                  </div>
+                </div>
+              );
+            }
+
+            return (
+              <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+                {slicedUsers.map((user, i) => renderCard(user, i, false))}
               </div>
-            ))}
-          </div>
+            );
+          })()}
 
           {/* Audio Waves Simulation */}
           <div className="p-4 bg-slate-900/60 rounded-xl border border-slate-800 flex items-center justify-between shrink-0">
