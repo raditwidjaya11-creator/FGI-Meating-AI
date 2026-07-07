@@ -68,7 +68,7 @@ Instructions:
 3. Be professional, structured, concise, and business-oriented. Do not hallucinate data that is not present in the provided JSON, but do feel free to synthesize insights (e.g. summarizing streaks, finding delayed tasks, or identifying busy PICs).`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: message,
       config: {
         systemInstruction: systemPrompt,
@@ -222,7 +222,7 @@ Do NOT wrap the output in markdown code blocks, and do NOT output anything other
     const userPrompt = `Spoken Command: "${command}"`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: userPrompt,
       config: {
         systemInstruction: systemPrompt,
@@ -327,7 +327,7 @@ Do NOT wrap the output in markdown code blocks or write any explanation outside 
 ${JSON.stringify(lines, null, 2)}`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: userPrompt,
       config: {
         systemInstruction: systemPrompt,
@@ -488,7 +488,7 @@ Do NOT wrap the output in markdown code blocks or write any explanation outside 
 ${JSON.stringify(lines, null, 2)}`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: userPrompt,
       config: {
         systemInstruction: systemPrompt,
@@ -572,7 +572,7 @@ Include:
 5. Analisis Efektivitas, ROI Estimasi, Analisis Sentimen Rapat, dan Rekomendasi AI`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: mockPromptForMoM,
       config: {
         systemInstruction: systemInstruction,
@@ -693,7 +693,7 @@ Transcript:
 ${transcript || "No transcript available. Synthesize based on title, date, and agenda."}`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: userPrompt,
       config: {
         systemInstruction: systemInstruction,
@@ -722,7 +722,7 @@ ${transcript || "No transcript available. Synthesize based on title, date, and a
 
 // Configure Vite or Static Files
 async function startServer() {
-  if (process.env.NODE_ENV !== "production") {
+  if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
